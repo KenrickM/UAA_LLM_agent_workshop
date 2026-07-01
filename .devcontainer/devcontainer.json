@@ -6,16 +6,12 @@
       "version": "22"
     }
   },
-  "forwardPorts": [3000, 8642],
+  "forwardPorts": [8648],
   "portsAttributes": {
-    "3000": {
-      "label": "Hermes Workspace UI",
+    "8648": {
+      "label": "Hermes Studio UI",
       "onAutoForward": "openBrowser"
-    },
-    "8642": {
-      "label": "Hermes Core Gateway",
-      "onAutoForward": "silent"
     }
   },
-  "postCreateCommand": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && git clone https://github.com/outsourc-e/hermes-workspace.git ~/hermes-workspace && cd ~/hermes-workspace && npm install"
+  "postCreateCommand": "npm install -g hermes-web-ui"
 }
