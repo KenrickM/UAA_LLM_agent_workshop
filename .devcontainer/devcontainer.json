@@ -1,0 +1,11 @@
+{
+  "name": "Hermes Agent Workshop",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  },
+  "forwardPorts": [4000],
+  "postCreateCommand": "pip install hermes-agent && npm install -g hermes-workspace-ui"
+}
