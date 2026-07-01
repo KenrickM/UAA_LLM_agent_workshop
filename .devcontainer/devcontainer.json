@@ -13,5 +13,5 @@
       "onAutoForward": "openBrowser"
     }
   },
-  "postCreateCommand": "npm install -g hermes-web-ui"
+  "postCreateCommand": "mkdir -p /home/vscode/.hermes && touch /home/vscode/.hermes/config.yaml && pip install hermes-agent && npm install -g hermes-web-ui"
 }
