@@ -1,11 +1,21 @@
 {
-  "name": "Hermes Agent Workshop",
+  "name": "Hermes Productivity Agent Workshop",
   "image": "mcr.microsoft.com/devcontainers/python:3.11",
-  "customizations": {
-    "vscode": {
-      "extensions": ["ms-python.python"]
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
     }
   },
-  "forwardPorts": [4000],
-  "postCreateCommand": "pip install hermes-agent && npm install -g hermes-workspace-ui"
+  "forwardPorts": [3000, 8642],
+  "portsAttributes": {
+    "3000": {
+      "label": "Hermes Workspace UI",
+      "onAutoForward": "openBrowser"
+    },
+    "8642": {
+      "label": "Hermes Core Gateway",
+      "onAutoForward": "silent"
+    }
+  },
+  "postCreateCommand": "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash && git clone https://github.com/outsourc-e/hermes-workspace.git ~/hermes-workspace && cd ~/hermes-workspace && npm install"
 }
