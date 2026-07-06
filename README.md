@@ -1,2 +1,2 @@
-# hermes_workshop
+# agent_workshop
 
