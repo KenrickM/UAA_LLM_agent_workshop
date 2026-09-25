@@ -9,7 +9,7 @@ mkdir -p /home/vscode/.hermes
 
 # Write config with tool execution permissions enabled
 cat << CONFIG > /home/vscode/.hermes/config.yaml
-model: "Qwen/Qwen3.8-27B-FP8"
+model: "Qwen/Qwen3.6-35B-A3B-FP8"
 provider: "custom"
 base_url: "${BASE_URL}"
 api_key: "none"
