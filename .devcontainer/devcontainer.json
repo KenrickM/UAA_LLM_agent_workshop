@@ -2,19 +2,17 @@
   "name": "Hermes Productivity Agent Workshop",
   "image": "mcr.microsoft.com/devcontainers/python:3.11",
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    },
     "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.14"
+      "version": "3.14",
+      "installTools": false
     }
   },
-  "forwardPorts": [8648],
+  "forwardPorts": [9119],
   "portsAttributes": {
-    "8648": {
-      "label": "Hermes Studio UI",
+    "9119": {
+      "label": "Hermes Web Dashboard",
       "onAutoForward": "openBrowser"
     }
   },
-  "postCreateCommand": "mkdir -p /home/vscode/.hermes && touch /home/vscode/.hermes/config.yaml && pip install hermes-agent && npm install -g hermes-web-ui"
+  "postCreateCommand": "mkdir -p /home/vscode/.hermes && touch /home/vscode/.hermes/config.yaml && pip3.11 install --upgrade pip && pip3.11 install \"hermes-agent[web,pty]\" && python3.14 -m venv /home/vscode/calendar_email_env"
 }
