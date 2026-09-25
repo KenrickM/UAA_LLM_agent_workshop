@@ -19,10 +19,11 @@ real email or calendar accounts.**
 ## Quick start
 
 ```bash
-python3 app.py             # serves the web app on http://localhost:8321
+source /home/vscode/calendar_email_env/bin/activate
+python3 app.py             # serves the web app port 8321
 ```
 
-Open <http://localhost:8321> in a browser.
+Open in a browser; on github codespace you'll be given a link, if running standalone open on <http://localhost:8321> .
 
 Options:
 
@@ -96,7 +97,7 @@ For the calendar agent, here is a possible spec:
 > that references one of tomorrow's events, re-run the agent and confirm the
 > new mail shows up in the right place.
 
-Things to point participants at:
+Things to look at:
 
 - The markdown format blocks at the top of each data file describe the
   layout explicitly (LLM-friendly on purpose).
@@ -127,3 +128,10 @@ next-day-prep/
      calendar.md # 14 days of events
      inbox.md    # 154 emails
 ```
+
+Email tasks to try:
+- Extract top action items
+- Find a time to schedule the Title II meeting
+
+Calendar tasks to try:
+- Find emails related to tomorrow's calendar items to provide context
