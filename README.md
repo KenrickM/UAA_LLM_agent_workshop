@@ -20,7 +20,7 @@ real email or calendar accounts.**
 
 ```bash
 source /home/vscode/calendar_email_env/bin/activate
-python3 app.py             # serves the web app port 8321
+python3 app.py
 ```
 
 Open in a browser; on github codespace you'll be given a link, if running standalone open on <http://localhost:8321> .
@@ -129,9 +129,19 @@ next-day-prep/
      inbox.md    # 154 emails
 ```
 
-Email tasks to try:
+## Email tasks to try:
 - Extract top action items
 - Find a time to schedule the Title II meeting
 
-Calendar tasks to try:
+## Calendar tasks to try:
 - Find emails related to tomorrow's calendar items to provide context
+
+## Starting Hermes Agent
+In the terminal area, click the "+" and choose "New Terminal" then run:
+```
+sh ./setup.sh
+```
+If you do not see a new browser page, click on the "Ports" tab and then click on the globe icon to open the Hermes dashboard in a new window.
+
+- To try: In chat or in cron, direct the agent to do email reconnaissance to provide context for the next day's calendar events.  They are located in data/calendar.md and data/inbox.md.
+- Try having your agent send data to a Google Space!  Create a space in Google Chat, under the space's name choose Apps and Integration, create webhook, copy the URL, and provide to Hermes agent for delivery.
