@@ -42,6 +42,33 @@ HERE = Path(__file__).resolve().parent
 DATA_DIR = HERE / "data"
 CALENDAR_FILE = "calendar.md"
 INBOX_FILE = "inbox.md"
+BASE_DATE_FILE = "base_date.txt"
+
+# "Today" inside the simulation: the workshop day. The sample data is
+# generated relative to a base date (python3 generate.py [YYYY-MM-DD]) and
+# recorded in data/base_date.txt, which app.py prefers; if that file is missing
+# we fall back to SIM_TODAY below rather than the machine clock, so the app
+# always opens on (and can always navigate back to) the week that has events.
+# Overridable with --today.
+SIM_TODAY = date(2026, 9, 25)
+TODAY = SIM_TODAY
+
+# Time of day the simulation is "running at" — end of the workday on the
+# workshop day. Used for the red now-line so the page looks the same whenever
+# it is opened; sending mail moves it forward (see append_email).
+SIM_NOW_TIME = time(17, 45)
+
+
+def read_base_date(data_dir: Path) -> date | None:
+    """The date the sample data was generated for, if it says."""
+    try:
+        txt = (data_dir / BASE_DATE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    try:
+        return datetime.strptime(txt[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
 
 WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 WEEKDAY_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
@@ -369,6 +396,7 @@ a.mailrow { text-decoration:none; color:inherit; display:block; }
 .badge.newsletter { color:#f5d76e; border-color:rgba(245,215,110,.4); }
 .badge.request { color:var(--accent); border-color:rgba(125,249,255,.4); }
 .badge.misc { color:var(--aurora3); border-color:rgba(196,181,253,.4); }
+.badge.sent { color:#d3d8e0; border-color:rgba(211,216,224,.45); }
 /* email detail */
 .email-head { border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:16px; }
 .email-subj { font-size:19px; font-weight:650; margin:0 0 8px; }
@@ -399,12 +427,20 @@ The source of truth for this app is two plain markdown files — read them direc
 <code>GET /calendar.md</code> (14 days of entries) and <code>GET /inbox.md</code>
 (every email, newest first, each starting with a <code>## [YYYY-MM-DD HH:MM] From: ...</code> heading).
 They also exist on disk at <code>{data_dir}/calendar.md</code> and <code>{data_dir}/inbox.md</code>.
+The clock in this simulated world reads <strong>{now}</strong> — "today" is
+<strong>{today}</strong> and the next day to prepare for is
+<strong>{tomorrow}</strong>. <code>GET /api/health</code> reports the same values.
 </div>
 """.strip()
 
 
 def shell(active: str, title: str, body: str, hint: bool = False) -> str:
-    h = AGENT_HINT.format(data_dir=DATA_DIR) if hint else ""
+    now = sim_now()
+    when = f"{now:%A} {now.day} {now:%b} {now.year}, {now:%H:%M}"
+    h = (AGENT_HINT.format(data_dir=DATA_DIR, now=when,
+                           today=TODAY.isoformat(),
+                           tomorrow=(TODAY + timedelta(days=1)).isoformat())
+         if hint else "")
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -418,7 +454,8 @@ def shell(active: str, title: str, body: str, hint: bool = False) -> str:
   <div class="logo">&#127773;</div>
   <div>
     <h1>UAA Chancellor Mail &amp; Calendar</h1>
-    <div class="subtitle">Dr. Ingrid Halvorsen &middot; University of Alaska Anchorage &middot; (simulated)</div>
+    <div class="subtitle">Dr. Ingrid Halvorsen &middot; University of Alaska Anchorage
+    &middot; <span class="simclock">{esc(when)} (simulated)</span></div>
   </div>
   <nav>
     <a href="/calendar" class="{ 'active' if active=='calendar' else '' }">&#128197; Calendar</a>
@@ -440,7 +477,7 @@ Data files: <code>data/calendar.md</code> &middot; <code>data/inbox.md</code></f
 # ---------------------------------------------------------------------------
 
 def cal_page(days: dict[str, list[CalEvent]], today: date, start: date,
-             day_focus: date | None) -> str:
+             day_focus: date | None, now_dt: datetime) -> str:
     monday = monday_of(start)
     week = [monday + timedelta(days=i) for i in range(7)]
     # title
@@ -476,14 +513,14 @@ def cal_page(days: dict[str, list[CalEvent]], today: date, start: date,
                 f'href="/event?d={iso}&i={idx}" title="{escq(e.title)}">'
                 f'<span class="ev-time">{e.start}–{e.end}</span>'
                 f'<span class="ev-title">{esc(e.title)}</span></a>')
-        # now line
+        # now line — pinned to the simulated clock, not the machine clock
         nowline = ""
-        if d == today:
-            nowdt = datetime.now()
-            nm = nowdt.hour * 60 + nowdt.minute
+        if d == now_dt.date():
+            nm = now_dt.hour * 60 + now_dt.minute
             if GRID_START_H * 60 <= nm <= GRID_END_H * 60:
                 top = (nm - GRID_START_H * 60) / 30 * 44
-                nowline = f'<div class="nowline" style="top:{top:.1f}px"></div>'
+                nowline = (f'<div class="nowline" style="top:{top:.1f}px">'
+                           f'</div>')
         is_today = " today" if d == today else ""
         day_blocks.append(
             f'<td class="daycell">{"".join(cells)}{"".join(ev_html)}{nowline}</td>')
@@ -539,7 +576,7 @@ def cal_page(days: dict[str, list[CalEvent]], today: date, start: date,
     toolbar = f"""
 <div class="cal-toolbar">
   <a class="btn" href="/calendar?start={prev_m.isoformat()}">&#8592; Prev</a>
-  <a class="btn" href="/calendar?start={monday.isoformat()}">Today</a>
+  <a class="btn" href="/calendar?day={today.isoformat()}">Today</a>
   <a class="btn" href="/calendar?start={next_m.isoformat()}">Next &#8594;</a>
   <span class="cal-title">{esc(title)}</span>
   <span class="muted small">Click an event for details</span>
@@ -596,6 +633,8 @@ NEWS_HINTS = ("UAK Weekly", "IHE:", "APM:", "DKNG:", "KENA:", "Chamber:",
 
 
 def guess_tag(frm: str, subj: str, body: str) -> str:
+    if "(sent)" in frm:
+        return "sent"
     hay = subj + " " + frm
     if any(h in hay for h in SPAM_HINTS):
         return "spam"
@@ -718,6 +757,32 @@ def count_events(text: str) -> int:
     return len(re.findall(r"^- \d{2}:\d{2}", text, re.M))
 
 
+_SIM_NOW_CACHE: tuple[float, datetime] | None = None
+
+
+def sim_now() -> datetime:
+    """The simulated "now": the newest timestamp in the inbox, so the world's
+    clock sits at the end of the workday on the simulated day and moves
+    forward when participants send mail. Never the machine clock."""
+    global _SIM_NOW_CACHE
+    path = DATA_DIR / INBOX_FILE
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return datetime.combine(TODAY, SIM_NOW_TIME)
+    if _SIM_NOW_CACHE and abs(_SIM_NOW_CACHE[0] - mtime) < 1e-9:
+        return _SIM_NOW_CACHE[1]
+    text = read_file(INBOX_FILE) or ""
+    stamps = re.findall(r"^## \[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]", text, re.M)
+    if stamps:
+        now = datetime.strptime(max(f"{d} {t}" for d, t in stamps),
+                                "%Y-%m-%d %H:%M")
+    else:
+        now = datetime.combine(TODAY, SIM_NOW_TIME)
+    _SIM_NOW_CACHE = (mtime, now)
+    return now
+
+
 def newest_inbox_timestamp(text: str) -> datetime:
     """Return the newest timestamp among existing inbox entries.
 
@@ -726,7 +791,7 @@ def newest_inbox_timestamp(text: str) -> datetime:
     """
     stamps = re.findall(r"^## \[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\]", text, re.M)
     if not stamps:
-        return datetime.now().replace(second=0, microsecond=0)
+        return datetime.combine(TODAY, SIM_NOW_TIME)
     best = max(f"{d} {t}" for d, t in stamps)
     return datetime.strptime(best, "%Y-%m-%d %H:%M")
 
@@ -783,7 +848,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         path = url.path.rstrip("/") or "/"
         qs = {k: v[0] for k, v in parse_qs(url.query).items()}
-        today = date.today()
+        today = TODAY
 
         if path == "/":
             self._redirect("/calendar")
@@ -800,11 +865,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 start = parse_date(qs.get("start"), monday_of(today))
             self._html("calendar", "Calendar",
-                       cal_page(days, today, start, day_focus), hint=True)
+                       cal_page(days, today, start, day_focus, sim_now()),
+                       hint=True)
         elif path == "/event":
             cal = read_file(CALENDAR_FILE)
             days = parse_calendar(cal) if cal else {}
-            d = parse_date(qs.get("d"), date.today())
+            d = parse_date(qs.get("d"), TODAY)
             try:
                 idx = int(qs.get("i", "-1"))
             except ValueError:
@@ -840,6 +906,11 @@ class Handler(BaseHTTPRequestHandler):
             payload = {
                 "status": "ok",
                 "data_dir": str(DATA_DIR),
+                # what the simulator calls "today" (see data/base_date.txt);
+                # an agent's "next day" is `tomorrow` below
+                "today": TODAY.isoformat(),
+                "tomorrow": (TODAY + timedelta(days=1)).isoformat(),
+                "now": sim_now().isoformat(timespec="minutes"),
                 "calendar_events": count_events(cal) if cal else 0,
                 "inbox_messages": count_emails(box) if box else 0,
                 "endpoints": {
@@ -908,14 +979,19 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 
 def main():
-    global DATA_DIR
+    global DATA_DIR, TODAY
     ap = argparse.ArgumentParser(
         description="UAA Chancellor Mail & Calendar (workshop simulator)")
     ap.add_argument("--port", type=int, default=8321)
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--data-dir", type=Path, default=HERE / "data")
+    ap.add_argument("--today", type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
+                    default=None, metavar="YYYY-MM-DD",
+                    help="date to treat as today (default: data/base_date.txt, "
+                         f"else {SIM_TODAY})")
     args = ap.parse_args()
     DATA_DIR = args.data_dir.resolve()
+    TODAY = args.today or read_base_date(DATA_DIR) or SIM_TODAY
 
     for name in (CALENDAR_FILE, INBOX_FILE):
         if not (DATA_DIR / name).exists():
@@ -924,6 +1000,9 @@ def main():
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"UAA Chancellor Mail & Calendar running at http://{args.host}:{args.port}")
     print(f"  data dir: {DATA_DIR}")
+    print(f"  treating {TODAY} as today"
+          + ("" if args.today or read_base_date(DATA_DIR)
+             else f" (default; no {BASE_DATE_FILE})"))
     print("  agent endpoints: GET /calendar.md  GET /inbox.md  POST /api/send")
     try:
         httpd.serve_forever()

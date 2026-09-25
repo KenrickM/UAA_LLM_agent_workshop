@@ -20,6 +20,12 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
 
+# The workshop day. Everything in the sample world is dated relative to this:
+# "today" is Friday 2026-09-25, so "next day" is Saturday 2026-09-26 and the
+# Title II options fall in the following week. Pass a date on the command line
+# (python3 generate.py 2026-10-02) to shift the whole world instead.
+SIM_TODAY = date(2026, 9, 25)
+
 CHANCELLOR = "Dr. Ingrid Halvorsen"
 CHANCELLOR_TITLE = "Chancellor, University of Alaska Anchorage"
 CHANCELLOR_ADDR = "ingrid.halvorsen@alaska.edu"
@@ -300,15 +306,81 @@ ONE_OFFS: dict[int, list[dict]] = {
 }
 
 
+def _to_hours(t: str) -> float:
+    h, m = t.split(":")
+    return int(h) + int(m) / 60
+
+
+def _to_str(v: float) -> str:
+    return f"{int(v):02d}:{int(round((v - int(v)) * 60)):02d}"
+
+
+def titleii_slots(today: date) -> list[tuple[date, float, float]]:
+    """The six proposed Title II working-session slots: the Monday to Thursday
+    of the week after `today`, as (date, start, end) in decimal hours."""
+    monday = today + timedelta(days=7 - today.weekday())
+    return [
+        (monday,                      12.0, 13.0),
+        (monday,                      15.0, 16.0),
+        (monday + timedelta(days=1),  16.0, 17.0),
+        (monday + timedelta(days=2),   9.0, 10.0),
+        (monday + timedelta(days=3),  12.0, 13.0),
+        (monday + timedelta(days=3),  16.0, 17.0),
+    ]
+
+
+LAST_CLEAR: dict[str, int] = {"moved": 0, "dropped": 0}
+
+
+def clear_slots_for_titleii(days: list[tuple[date, list[dict]]],
+                            today: date) -> tuple[int, int]:
+    """Keep the six proposed slots free on the Chancellor's own calendar — she
+    has to be able to attend the meeting the inbox is scheduling.
+
+    A clashing event is pushed to the nearest free time on the same day; if the
+    day has nowhere free, the event is dropped. Returns (moved, dropped).
+    """
+    moved = dropped = 0
+    for day, evs in days:
+        windows = [(s, e) for d, s, e in titleii_slots(today) if d == day]
+        if not windows:
+            continue
+        for ev in list(evs):
+            a, b = _to_hours(ev["start"]), _to_hours(ev["end"])
+            if not any(a < e and b > s for s, e in windows):
+                continue
+            dur = b - a
+            placed = False
+            for start in sorted((h / 2 for h in range(16, 38 - int(dur * 2))),
+                                key=lambda h: (abs(h - a), h)):
+                end = start + dur
+                if any(_to_hours(o["start"]) < end and _to_hours(o["end"]) > start
+                       for o in evs if o is not ev):
+                    continue
+                if any(s < end and e > start for s, e in windows):
+                    continue
+                ev["start"], ev["end"] = _to_str(start), _to_str(end)
+                moved += 1
+                placed = True
+                break
+            if not placed:
+                evs.remove(ev)
+                dropped += 1
+        evs.sort(key=lambda e: e["start"])
+    LAST_CLEAR["moved"], LAST_CLEAR["dropped"] = moved, dropped
+    return moved, dropped
+
+
 def build_calendar(today: date) -> list[tuple[date, list[dict]]]:
     """Return [(date, [events])] for 14 days, offsets 0..13."""
     days = []
     for off in range(14):
         d = today + timedelta(days=off)
-        evs = list(WEEKDAY_ANCHORS.get(d.weekday(), []))
-        evs.extend(ONE_OFFS.get(off, []))
+        evs = [dict(e) for e in WEEKDAY_ANCHORS.get(d.weekday(), [])]
+        evs.extend(dict(e) for e in ONE_OFFS.get(off, []))
         evs.sort(key=lambda e: e["start"])
         days.append((d, evs))
+    clear_slots_for_titleii(days, today)
     return days
 
 
@@ -320,12 +392,13 @@ WEEKDAY_LONG = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
                 "Saturday", "Sunday"]
 
 
-def render_calendar(days: list[tuple[date, list[dict]]]) -> str:
+def render_calendar(days: list[tuple[date, list[dict]]], today: date) -> str:
     lines = [
         "# Calendar — Dr. Ingrid Halvorsen",
         "",
         f"**{CHANCELLOR_TITLE}** · {OFFICE}",
-        f"Calendar export generated {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Calendar export generated for {today.isoformat()} (14 days, today "
+        "forward)",
         "",
         "Format: each day is a `##` heading; each event is a bullet with "
         "`HH:MM–HH:MM — Title`, followed by indented `Location:` and "
@@ -424,6 +497,7 @@ CHAMBER = "Alaska Chamber of Commerce <news@akchamber.org>"
 ALUMNI = "UAA Alumni Association <alumni@uaa.edu>"
 AURORA_CLUB = "Aurora Club (student org) <auroraclub@uaa.edu>"
 SEAWOLVES = "UAA Athletics <seawolves@uaa.edu>"
+GRACE = "Grace Ningmaguardl (Accessibility & Compliance) <gningmaguardl@alaska.edu>"
 
 # spam / noise senders
 SPAM1 = "Cruises R' Us <deals@cruisesr.com>"
@@ -461,16 +535,17 @@ def event_mails(today: date) -> None:
              "• Alan and Marjorie Halvorsen will be here, plus my "
              "colleague Dev Patel (major gifts).",
              "• We're serving the good coffee and the new permafrost-lab "
-             "mug (yes, we put the 10,000-year-old-tusk fact on the "
-             "bottom).",
+             "mug. The 10,000-year-old tusk fact is printed on the "
+             "bottom, as agreed.",
              "• Please keep the $2.5M endowment discussion to the "
-             "term-sheet language; Rajesh has already flagged that the "
-             "naming options are 'Arctic Engineering Lab' vs. 'Halvorsen "
-             "Arctic Engineering Institute'. I'd like to hear your "
-             "preference before I mention it to them.",
-             "• If the aurora shows up at breakfast (long odds, but it "
-             "is August), Dev has a camera ready for the 'aurora "
-             "breakfast' photo. Do NOT encourage this. He will anyway.",
+             "term-sheet language. Rajesh has flagged that the naming "
+             "options are 'Arctic Engineering Lab' versus 'Halvorsen "
+             "Arctic Engineering Institute', and I would like to hear "
+             "your preference before I raise it with them.",
+             "• Dev has a camera ready in case the aurora puts in an "
+             "appearance at breakfast, which this late in September it "
+             "plausibly might. Please do not encourage him. It will not "
+             "make a difference.",
              "Carol",
          ), "related")
     mail(t1, 15, 30, REED, "Statewide Chancellor Forum — agenda + video "
@@ -485,8 +560,8 @@ def event_mails(today: date) -> None:
              "3. Transportation contingencies: the polar vortex forecast "
              "has several of us looking at snow-day policies (10:40).",
              "4. Open comments (11:15).",
-             "The video link is below; the backup dial-in is on the "
-             "agenda PDF. I will open.",
+             "The video link is below and the backup dial-in number is on "
+             "the agenda PDF. I will chair, so I will open the meeting.",
              "Tom Reed",
          ), "related")
     mail(t1, 14, 45, KOVIC, "Arctic Wolf Center — Q3 telemetry + "
@@ -505,10 +580,10 @@ def event_mails(today: date) -> None:
              "research ethics board, subject to the handler-transport "
              "plan we'll review later this month (it's on your "
              "calendar).",
-             "If you have 2 minutes at the start of the debrief, I'd "
-             "like your read on the 'little wolf' photo op with Ralph "
-             "the Walrus. The students think it's a good idea. I think "
-             "it's a good idea. So does the wolf, apparently.",
+             "If you have two minutes at the top of the debrief, I would "
+             "like your read on pairing the 'little wolf' photo op with "
+             "Ralph the Walrus. The students are in favour, I am in "
+             "favour, and the wolf has raised no objection.",
              "— Lena",
          ), "related")
     mail(t1, 17, 0, NAKAMURA, "Aurora Watch Briefing (tomorrow 16:00) — "
@@ -529,9 +604,8 @@ def event_mails(today: date) -> None:
              "• I need your written recommendation by 5 PM tomorrow "
              "(form is in the shared drive; Katie is leaving a paper "
              "copy on your desk).",
-             "• Note for the record: I have personally never seen an "
-             "aurora from the Aurora Ballroom. I intend to change "
-             "that.",
+             "• For the record: I have never once seen an aurora from the "
+             "Aurora Ballroom, and I intend to change that.",
              "— S. Nakamura, Geophysical Institute",
          ), "related")
     mail(t, 6, 55, KATIE, "This morning's brief — tomorrow's schedule + "
@@ -564,7 +638,7 @@ def event_mails(today: date) -> None:
              "at 8 AM tomorrow sharp. If the donor car is early, I'll "
              "meet them in the admin lot (space 'H').",
              "• Weather: high 52, overcast, 20% flurries. The aurora "
-             "forecast is a separate conversation (see Dr. Nakamura), "
+             "forecast is Dr. Nakamura's call, not mine, "
              "but for the permafrost-lab ribbon cutting the day after "
              "tomorrow, facilities wants to know by tomorrow afternoon "
              "whether we keep the 11:30 press availability on the "
@@ -582,14 +656,12 @@ def event_mails(today: date) -> None:
              "Beringer. Ribbon at 10:40, photo op with the core "
              "samples at 11:00.",
              "Media confirmed: DKNG (one reporter), KENA (two), "
-             "Alaska Public Media (audio). The APM producer asked if "
-             "we could have the 10,000-year-old mammoth-tusk fact "
-             "available as a one-sentence pull quote — I've drafted "
-             "it; it's the laminated fact sheet, not the 14-page "
-             "version.",
-             "Please do not ad-lib the tusk fact; the comms-approved "
-             "version is on the laminated fact sheet. (I know. I'm "
-             "sorry.)",
+             "Alaska Public Media (audio). The APM producer asked for the "
+             "10,000-year-old mammoth-tusk fact as a one-sentence pull "
+             "quote; I have drafted one, and it is the laminated fact "
+             "sheet rather than the 14-page version.",
+             "Please stick to the comms-approved wording on the laminated "
+             "card. I know how that reads. I am sorry.",
              "J. Brooks",
          ), "related")
     mail(t1, 10, 30, REP_M, "Re: Permafrost lab ribbon cutting",
@@ -602,10 +674,10 @@ def event_mails(today: date) -> None:
              "the permafrost lab supports the state's "
              "climate-mitigation plan, I'd like to use it in my "
              "statement that day.",
-             "2. I'm bringing my chief of staff, J. Taimi. She has "
-             "strong feelings about the parking situation on the west "
-             "side of the GI building and would like a word with "
-             "facilities. Please keep her away from T. Kowalski.",
+             "2. I am bringing my chief of staff, J. Taimi. She has strong "
+             "feelings about the parking on the west side of the GI "
+             "building and would like a word with facilities, so please "
+             "route her to someone other than T. Kowalski.",
              "Ada",
          ), "related")
     mail(t, 9, 30, RAMAN, "Permafrost lab — ribbon cutting + one "
@@ -613,15 +685,14 @@ def event_mails(today: date) -> None:
          P(
              "Ingrid,",
              "All set for the ribbon cutting. One flag: the lab's "
-             "permafrost core display case is on the second floor, "
-             "and the west-wing elevator is the one that's been "
-             "making the noise. Facilities says it's 'fine' with "
-             "quotes. If Rep. Moses wants to see the cores, we should "
-             "plan on the stairs (three flights) or pre-stage the "
-             "case in the lobby.",
-             "Also: Prof. Beringer is bringing the 10,000-year-old "
-             "tusk fact as a physical card for the media. Comms "
-             "approved. Do not let him elaborate.",
+             "permafrost core display case is on the second floor, and the "
+             "west-wing elevator is the one that has been making the "
+             "noise. Facilities calls it 'fine', with quotes. If Rep. "
+             "Moses wants to see the cores, we should plan on the stairs "
+             "(three flights) or pre-stage the case in the lobby.",
+             "Prof. Beringer is bringing the 10,000-year-old tusk fact as "
+             "a physical card for the media. Comms has approved it. Please "
+             "do not let him elaborate.",
              "Priya",
          ), "related")
     mail(t, 10, 15, TUNDRA, "Aurora Gala — catering confirmation + menu "
@@ -632,13 +703,13 @@ def event_mails(today: date) -> None:
              "Aurora' donor gala (Aurora Ballroom, Hyatt Regency, 5 "
              "PM on gala day, 170 guests). Your two menu options "
              "for tomorrow's planning session:",
-             "A) 'Northern Plate' — king crab, pan-seared Arctic "
-             "char, and a baked potato bar with the good sour cream.",
-             "B) 'Aurora Feast' — same as A, but the char is "
-             "smoked, and we add a 'glow' dessert (edible aurora "
-             "garnish, blue spirulina, very Instagrammable).",
-             "B is $1,200 more. We can hold either through the "
-             "planning session.",
+             "A) 'Northern Plate' — king crab, pan-seared Arctic char, and "
+             "a baked potato bar with the good sour cream.",
+             "B) 'Aurora Feast' — the same, but the char is smoked, and we "
+             "add a 'glow' dessert: an edible aurora garnish coloured with "
+             "blue spirulina. Very photogenic.",
+             "B is $1,200 more. We can hold either option through "
+             "tomorrow's planning session.",
              "— Tundra Trails Events",
          ), "related")
     mail(t, 11, 45, HYATT, "Re: Aurora Ballroom — gala day, load-in + "
@@ -652,10 +723,10 @@ def event_mails(today: date) -> None:
              "• Guest parking: garage validated; we've reserved 40 "
              "spaces. Given the polar vortex forecast, you may want "
              "to post a snow-day note on the invitation insert.",
-             "• The ballroom's north windows face the open sky; the "
-             "event manager noted that 'if the aurora shows up, the "
-             "ceiling is a 24-foot drop so the lights will be very "
-             "visible from the dance floor.' (No promises.)",
+             "• The ballroom's north windows face open sky. Our event "
+             "manager notes that on a strong night the lights are "
+             "visible from the dance floor, since the ceiling is a "
+             "24-foot drop. No promises, of course.",
              "Hyatt Regency Anchorage — Events",
          ), "related")
     mail(t, 13, 20, KATIE, "Re: gala Kp form — paper copy on your desk",
@@ -681,9 +752,9 @@ def event_mails(today: date) -> None:
              "District is on board with the joint subarctic-weather "
              "course (one section, 15 seats, shared with UAA "
              "atmospheric science). King Salmon's mayor asked if the "
-             "literacy night could have a 'read to a wolf' segment. "
-             "We have discussed this. We are saying no. We are "
-             "saying no with love.",
+             "literacy night could have a 'read to a wolf' segment. We "
+             "have discussed this, and the answer is no, and we are sorry "
+             "about it.",
              "— UAA Arctic Wolf Center (community programs)",
          ), "related")
 
@@ -691,8 +762,8 @@ def event_mails(today: date) -> None:
     mail(t1, 14, 10, CFO, "Juneau trip — flight + testimony materials",
          P(
              "Ingrid —",
-             "You fly to Juneau at 06:15 (Delta 1201; the gate is "
-             "always the departure board). Materials for the 10:40 "
+             "You fly to Juneau at 06:15 on Delta 1201; I will confirm the "
+             "gate the night before. Materials for the 10:40 "
              "fiscal-committee testimony are in the shared drive: "
              "slides, the FY27 one-pager, and the backup tab with "
              "the infrastructure numbers.",
@@ -701,9 +772,9 @@ def event_mails(today: date) -> None:
              "in the first five minutes. I moved it to slide 3. Dr. "
              "Raman is riding shotgun on the infrastructure tab.",
              "Also: Rep. Moses's working lunch — she asked for the "
-             "King Salmon micro-campus one-pager (it's the 2-page "
-             "PDF, not the 14-page white paper. The 14-page one is "
-             "for the wolves, figuratively).",
+             "King Salmon micro-campus one-pager. That is the 2-page PDF, "
+             "not the 14-page white paper; please do not hand her the "
+             "white paper.",
              "Rajesh",
          ), "related")
     mail(t, 9, 50, REP_M, "Re: Juneau — lunch + King Salmon "
@@ -726,13 +797,13 @@ def event_mails(today: date) -> None:
                               "photo op",
          P(
              "Ingrid —",
-             "Game day: front-row seats for your office are reserved "
-             "(the ones with the good ice, not the ones by the "
-             "zamboni). I'll meet you at the arena office at 11:30. "
-             "Ralph the Walrus has a photo op at 13:15 (intermission); "
-             "he'll be in the 'winter' costume (the scarf). The "
-             "Seawolves are favored; I'm not saying how much. The "
-             "ice is good. The crowd is good. The walrus is good.",
+             "Game day: front-row seats for your office are reserved, on "
+             "the good side of the glass and well away from the zamboni. "
+             "I'll meet you at the arena office at 11:30. Ralph the Walrus "
+             "has a photo op at 13:15, at intermission, in the 'winter' "
+             "costume, which is the usual costume with a scarf. The "
+             "Seawolves are favored by more than I want to say out loud. "
+             "The ice is good.",
              "Mike Frazier, Athletic Director",
          ), "related")
     mail(t2, 10, 20, KATIE, "For the record: the walrus + the scarf",
@@ -790,11 +861,11 @@ def event_mails(today: date) -> None:
              "needs a 10-minute pre-trip inspection) and the "
              "liability waiver (legal wants the student audience "
              "sign-off to be one page, not the three-page version).",
-             "Also: the students keep asking if Ralph the Walrus "
-             "will be there. I said 'it depends on the walrus.' It "
-             "does not depend on the walrus. It depends on the mascot "
-             "coordinator's schedule. But the walrus is a good "
-             "excuse.",
+             "Also: the students keep asking whether Ralph the Walrus "
+             "will be there. I said 'it depends on the walrus', which is "
+             "not true. It depends on the mascot coordinator's schedule. "
+             "The walrus is a better excuse than the schedule, so I will "
+             "keep using it.",
              "— Lena",
          ), "related")
 
@@ -805,14 +876,13 @@ def event_mails(today: date) -> None:
              "Ingrid — for the mascot committee call:",
              "• Ralph has two costume sizes (regular and 'winter', "
              "which is the same costume with a scarf).",
-             "• Strict 90-minute limit in the cold, per the mascot "
-             "coordinator's physician (the physician is the "
-             "coordinator's mother; we do not question the mother).",
-             "• The fall poster shoot works for a morning slot; the "
-             "gala invitation insert needs one close-up (Ralph "
-             "holding the gala date card). I'll bring the card in "
-             "two sizes. He has held things before. He holds things "
-             "well.",
+             "• Strict 90-minute limit in the cold, cleared by the "
+             "coordinator's physician, who is also her mother, and whom "
+             "we do not question.",
+             "• The fall poster shoot works for a morning slot. The gala "
+             "invitation insert needs one close-up of Ralph holding the "
+             "gala date card, so I will bring the card in two sizes. He "
+             "has held things before and he holds them well.",
              "D. Redcloud",
          ), "related")
     mail(t3, 14, 0, HOUGHTON, "IRB quarterly review — agenda + two "
@@ -840,7 +910,8 @@ def event_mails(today: date) -> None:
              "is moving), the sabbatical backlog (currently 11 "
              "faculty), and a question about whether the gala "
              "keynote counts as 'university business' for workload "
-             "purposes. (It does. I answered that one for you.)",
+             "purposes. For the record, it does, and I have already "
+             "answered that one for the room.",
              "If you'd like, I can bring the senate's "
              "workload-policy draft to the forum so it's in the room "
              "rather than in the hallway.",
@@ -893,8 +964,8 @@ def event_mails(today: date) -> None:
     mail(t1, 18, 30, CAROL, "THE GALA — run-of-show + your keynote",
          P(
              "Ingrid — 'Under the Aurora,' 5 PM, Aurora Ballroom, "
-             "Hyatt Regency. 170 guests, black-tie (the good blazer; "
-             "the northern-lights scarf is encouraged).",
+             "Hyatt Regency. 170 guests, black tie. The good blazer. "
+             "The northern-lights scarf is encouraged.",
              "Run-of-show:",
              "• 17:00 doors, cocktail hour. Catering is tentatively "
              "Menu B (the 'glow' dessert); we finalize at the "
@@ -903,17 +974,17 @@ def event_mails(today: date) -> None:
              "laminated card with the three numbers: 2,500 students "
              "served, 10,000-year-old tusk, Kp 5 'good but not "
              "guaranteed').",
-             "• 18:45 'Aurora of the Year' photo contest awards "
-             "(winning photo: a moose in front of the aurora, "
-             "submitted by a student who is not in our program; the "
-             "moose is not ours; we are not responsible for the "
-             "moose).",
-             "• 19:15 live aurora forecast screen (Dr. Nakamura on "
-             "the video link; if Kp hits 5, she will say the words "
-             "'look out the windows' and it will be very good).",
-             "• 20:30 dance (the Aurora Club does the opening "
-             "number; they've been practicing for three months; "
-             "they're very good; I watched a rehearsal).",
+             "• 18:45 'Aurora of the Year' photo contest awards. The "
+             "winning photo is a moose in front of the aurora, submitted "
+             "by a student outside our program. The moose is not ours, the "
+             "university has never met the moose, and the rights are "
+             "clear.",
+             "• 19:15 live aurora forecast screen, Dr. Nakamura on the "
+             "video link. If Kp hits 5 she will say the words 'look out "
+             "the windows'. It is a good moment.",
+             "• 20:30 dance. The Aurora Club does the opening number; "
+             "they have been at it for three months and they are good. I "
+             "watched one rehearsal.",
              "I'll be at the front desk by 16:30. If the aurora "
              "shows up, do NOT announce it; let the windows do the "
              "talking.",
@@ -925,10 +996,11 @@ def event_mails(today: date) -> None:
              "Kp is now forecast 4–5 for gala night. The coronal "
              "hole is holding. If I'm right, the 'look out the "
              "windows' moment is real. If I'm wrong, the glow "
-             "dessert still works and the dance is very good.",
+             "dessert still works and the opening number is worth the "
+             "trip.",
              "My written recommendation will be ready at the aurora "
-             "watch briefing tomorrow (form in the blue folder; the "
-             "little wavy line is the right line).",
+             "watch briefing tomorrow; the form is in the blue folder, and "
+             "the wavy line at the bottom is the right one.",
              "— S. Nakamura",
          ), "related")
 
@@ -956,10 +1028,10 @@ def event_mails(today: date) -> None:
              "(carried from the first-of-month session; the "
              "endowment gift reporting is attached); (2) the gala "
              "gift results (Carol will present — the number is 'very "
-             "good' and I will let her say it); (3) campus master "
-             "plan public comment wrap-up (no material objections; "
-             "one comment was a poem about parking; I've included "
-             "it in the packet; it's good).",
+             "good' and I will let her say it); (3) campus master plan "
+             "public comment wrap-up. There were no material objections. "
+             "One comment was a poem about parking, which is in the "
+             "packet, and which is good.",
              "K. Kwan, Regent Chair",
          ), "related")
 
@@ -972,9 +1044,8 @@ def event_mails(today: date) -> None:
                  "(FY27 budget, endowment policy, master plan "
                  "comments). One note: the regents' cars are in the "
                  "admin lot, spaces A–F, per the standing "
-                 "arrangement. If space 'H' is empty, that's the "
-                 "donor space (it's always empty; we keep it for "
-                 "people we haven't met yet).",
+                 "arrangement. If space 'H' is empty, that is the donor "
+                 "space, and it is empty on purpose.",
                  "K. Kwan",
              ), "related")
     if today.weekday() == 1:  # Tuesday: faculty senate
@@ -1009,11 +1080,12 @@ def event_mails(today: date) -> None:
              P(
                  "Ingrid — the NIL compliance memo is in the shared "
                  "drive (legal cleared it; it's the short version; "
-                 "the long version is for the wolves, "
-                 "figuratively). The ice arena maintenance report: "
-                 "the ice is good, the zamboni is good, the mystery "
-                 "rattle is still a mystery (that's the facilities "
-                 "truck, not the arena; see T. Kowalski).",
+                 "the long version is forty pages). The ice arena "
+                 "maintenance report: "
+                 "the ice is good and the zamboni passed its inspection. "
+                 "The mystery rattle is still a mystery; that is the "
+                 "facilities truck, not the arena, and T. Kowalski has "
+                 "not replied.",
                  "Mike Frazier",
              ), "related")
     if today.weekday() == 3:  # Thursday: executive council
@@ -1050,11 +1122,178 @@ def event_mails(today: date) -> None:
                  "Today is the day. 11:30 at the arena office. "
                  "Front row is reserved. The walrus is at 13:15 "
                  "(intermission, 'winter' costume, the scarf). The "
-                 "ice is good. Go Seawolves. (I own a Seawolves "
-                 "hat. I am not saying it's a good hat. It's a good "
-                 "hat.)",
+                 "ice is good. Go Seawolves. I own a Seawolves hat, "
+                 "and I am told it is a good hat.",
                  "Mike Frazier",
              ), "related")
+
+
+# ---------------------------------------------------------------------------
+# A scheduling puzzle: Title II working session
+# ---------------------------------------------------------------------------
+
+def titleii_mails(today: date) -> None:
+    """The Chancellor asks seven people for a working session next week and
+    offers six slots; everyone replies. Exactly ONE slot works for all seven
+    (Wednesday 09:00-10:00). The others get 2, 3, 4 or 5 people.
+
+    The invitation is stored as a sent message (its From is marked "(sent)")
+    so the agent can see the original request and the participant list.
+    Slot dates are computed from the run date, so the puzzle always refers to
+    the week after the day the data was generated. The Chancellor is free in
+    all six slots (clear_slots_for_titleii pushes her own events out), so the
+    seven replies are the only thing deciding it.
+
+    Sender availability (1 = can attend):
+
+                        Mon 12-13  Mon 15-16  Tue 16-17  Wed 09-10  Thu 12-13  Thu 16-17
+        Iyer (CFO)           1          0          0          1          1          0
+        Kowalski             1          0          0          1          0          0
+        Nakata (admin)       1          1          1          1          1          1
+        Brooks (comms)       1          1          0          1          0          0
+        Ningmaguardl         1          1          0          1          1          0
+        Whitcomb (students)  0          1          0          1          0          1
+        Bell (IT)            0          0          1          1          0          1
+        -------------------------------------------------------------------------
+        total                5          4          2          7          3          3
+
+    ... so Wednesday 09:00-10:00 is the only slot all seven can make.
+    """
+    slot_lines = "\n".join(
+        f"  {i}. {day.strftime('%A')} {day.strftime('%b')} {day.day} "
+        f"{_to_str(s)}-{_to_str(e)}"
+        for i, (day, s, e) in enumerate(titleii_slots(today), 1))
+
+    roster = ("Rajesh Iyer (CFO), T. Kowalski (Facilities & Operations), "
+              "Marcus Bell (IT), Dr. Sam Whitcomb (VP Student Affairs), "
+              "Grace Ningmaguardl (Accessibility & Compliance), "
+              "J. Brooks (University Communications), "
+              "Katie Nakata (Chancellor's Office)")
+
+    core = (
+        "We need to meet next week regarding the Title II requirements. "
+        "Please indicate which of these six slots you are available to meet:\n\n"
+        + slot_lines
+    )
+
+    quoted = "\n".join("> " + ln for ln in core.splitlines())
+    quote = (f"On {today.strftime('%a %b %d, %Y')} at 08:55, "
+             f"{CHANCELLOR} wrote:\n\n{quoted}")
+
+    subject = "Title II working session - which slots work for you?"
+
+    # ---- the sent invitation --------------------------------------------
+    mail(today, 8, 55, f"{CHANCELLOR} (sent) <{CHANCELLOR_ADDR}>", subject,
+         P(
+             "Team -",
+             core,
+             "Reply-all with the slots that work. If none of the six work for "
+             "you, say so today and we will find a seventh. Please answer for "
+             "yourself only; Katie will tally.",
+             f"Participants: {roster}.",
+             "Katie will book the room once we land on a time. Bring the "
+             "current accessibility deficiency list for your area.",
+             "- Ingrid",
+         ), "related")
+
+    # ---- the seven replies ----------------------------------------------
+    # Availability (1 = can attend):
+    #                 Mon 12  Mon 15  Tue 16  Wed 09  Thu 12  Thu 16
+    # Iyer               1       0       0       1       1      0
+    # Kowalski           1       0       0       1       0      0
+    # Nakata             1       1       1       1       1      1
+    # Brooks             1       1       0       1       0      0
+    # Ningmaguardl       1       1       0       1       1      0
+    # Whitcomb           0       1       0       1       0      1
+    # Bell               0       0       1       1       0      1
+    # TOTAL              5       4       2       7       3      3
+
+    mail(today, 9, 12, CFO, f"Re: {subject}",
+         P(
+             "Wednesday 9 works for me, and so does Thursday noon. Monday noon "
+             "works as long as we are out of the room by 12:45, I have a call "
+             "at 1:00 sharp.",
+             "Tuesday 4 and Thursday 4 are both out, it is the budget lock and "
+             "you already know what that is like. Monday afternoon is out too, "
+             "I am in Kress all afternoon with the budget committee.",
+             "Rajesh",
+             quote,
+         ), "related")
+
+    mail(today, 9, 47, KOWALSKI, f"Re: {subject}",
+         P(
+             "Wednesday morning, so the 9:00 to 10:00. If it has to be "
+             "something else, Monday noon, and only because the walk-through "
+             "starts at 1.",
+             "I am in Juneau Tuesday and at the mechanical trades orientation "
+             "Thursday, both Thursday slots are gone. Everything I did not say "
+             "yes to is a no, sorry, I have three people and eleven buildings.",
+             "T. Kowalski",
+             quote,
+         ), "related")
+
+    mail(today, 10, 26, KATIE, f"Re: {subject}",
+         P(
+             "All six are open on the calendar and all six work for me. I have "
+             "left them as soft holds.",
+             "Wednesday 9:00 is my own preference (the 8:30 cabinet runs long "
+             "every single week, so 9:00 on a Wednesday is the cleanest start "
+             "of the six) but that is not a constraint on the group. I checked "
+             "the Chancellor's calendar for all six and all six are open on "
+             "that side too.",
+             "I will book the room as soon as we land on a time. Say the word "
+             "and I will send the invite.",
+             "- Katie",
+             quote,
+         ), "related")
+
+    mail(today, 11, 15, BROOKS, f"Re: {subject}",
+         P(
+             "Wednesday morning is best for me.",
+             "Monday noon to 1 is fine. Monday 3 to 4 also works if we keep it "
+             "tight, I have a pull-quote deadline at 3:30.",
+             "Tuesday 4 is out, I am shooting B-roll at the recreation "
+             "facility until 6. Both Thursday slots are out, Communications "
+             "is at the all-day retreat (the facilitator brought the yarn).",
+             "J. Brooks",
+             quote,
+         ), "related")
+
+    mail(today, 12, 40, GRACE, f"Re: {subject}",
+         P(
+             "Wednesday 9 is the one I would pick, and I will say up front that "
+             "the deficiency list is mine to walk through, so I would rather be "
+             "there than in a hallway later.",
+             "Monday noon and Monday 3 both work. Thursday noon works. Tuesday "
+             "4 is out, I am on the regional ADA coordination call in Fairbanks "
+             "and the audio is never good. Thursday 4 is out, I leave campus at "
+             "3 on Thursdays.",
+             "Grace",
+             quote,
+         ), "related")
+
+    mail(today, 14, 5, WHITCOMB, f"Re: {subject}",
+         P(
+             "Monday 3 to 4 works. Wednesday 9 works, though I will have to "
+             "leave at 9:45 for a student conduct hearing.",
+             "Monday noon is out, I am with the Student Senate budget committee. "
+             "Tuesday 4 is out, I am at the athletics fundraising dinner. "
+             "Thursday noon is out, provost travel debrief.",
+             "Thursday 4 to 5 works if we end up there.",
+             "Sam",
+             quote,
+         ), "related")
+
+    mail(today, 16, 38, BELL, f"Re: {subject}",
+         P(
+             "Wednesday 9 to 10 is good. The maintenance window closes at 3:00, "
+             "so Tuesday 4 to 5 is also fine, and so is Thursday after 4.",
+             "Monday is the worst day of my week, please do not put it on "
+             "Monday. Both of them. Thursday noon does not work either, that is "
+             "my standing one with the campus CIO crowd.",
+             "Marcus",
+             quote,
+         ), "related")
 
 
 # ---------------------------------------------------------------------------
@@ -1089,7 +1328,7 @@ def noise_mails(today: date) -> None:
          "to you because you seemed like someone who would want to know."),
         (d(-11), 19, 25, SPAM8, "The Daily Tundra: '5 Signs Your Lawn Is a Permafrost Anomaly'",
          "Sign 1: it's brown. Sign 2: it's still brown. Sign 3: you live in "
-         "Anchorage. Sign 4: it's August. Sign 5: you clicked."),
+         "Anchorage. Sign 4: it is September. Sign 5: you clicked."),
         (d(-10), 13, 33, SPAM4, "WIN-A-WOLF: you are a finalist!",
          "You are one of 3 finalists in the Win-a-Wolf contest! To win, "
          "simply pay the $49.99 entry fee. Please do not email the wolf. "
@@ -1210,8 +1449,9 @@ def noise_mails(today: date) -> None:
         (d(-7), 6, 15, SPOT, "Aurora Spotlight: 'Seawolves Season Preview: The Ice Is Good'",
          "Our season preview: the Seawolves are favored, the ice is good, "
          "and the mascot (Ralph the Walrus) will be in attendance, wearing "
-         "the 'winter' costume (the scarf). The athletic director says 'the "
-         "walrus is good.'"),
+         "the 'winter' costume, which is the usual costume with a scarf. "
+         "The athletic director's assessment of the conference remains "
+         "'unchanged.'"),
         (d(-6), 6, 30, UA_NEWS, "UAK Weekly: wolf telemetry update + gala announcement",
          "The UAA Arctic Wolf Center reports that wolf pack 'Nanuwak' has "
          "completed its summer territory shift. Also: UAA announces its "
@@ -1257,8 +1497,8 @@ def noise_mails(today: date) -> None:
         (d(0), 6, 30, SEAWOLVES, "UAA Athletics: 'Game Day Reminder — Front Row "
                                  "Reserved'",
          "Reminder: the chancellor's office has front-row seats reserved "
-         "for game day (the ones with the good ice, not the ones by the "
-         "zamboni). The athletic director will meet at the arena office at "
+         "for game day, on the good side of the glass and clear of the "
+         "zamboni. The athletic director will meet at the arena office at "
          "11:30. Ralph the Walrus has a photo op at 13:15 during "
          "intermission."),
     ]
@@ -1280,7 +1520,7 @@ def noise_mails(today: date) -> None:
          "A new ticket: the mystery rattle from the facilities truck is "
          "'learning' too. We are not sure if the rattle is the truck or the "
          "truck is the rattle. We've asked T. Kowalski in writing; he has "
-         "not answered. This is why we have tickets."),
+         "not answered, which is what the ticket is for."),
         (d(-10), 11, 45, ITD, "IT ticket #4824: projector in Regents Chamber (not working)",
          "The projector in the Regents Chamber is not working. It's not "
          "broken; it's 'thinking.' We've asked T. Kowalski to look at it; "
@@ -1327,9 +1567,9 @@ def noise_mails(today: date) -> None:
          "working during the transition. Questions? Reply to this ticket."),
         (d(0), 8, 45, ITD, "IT ticket #4834: the rattle (reopened again)",
          "Ticket #4823 (the rattle) is reopened again. The rattle is back "
-         "and 'learning' (see ticket #4821). We've asked T. Kowalski in "
-         "writing again. He has not answered again. This is why we have "
-         "tickets, and reopens."),
+         "and getting worse (see ticket #4821). We've asked T. Kowalski in "
+         "writing again. He has not answered again. That is what a reopen "
+         "looks like."),
     ]
     for day, h, m, frm, subj, body in it_items:
         mail(day, h, m, frm, subj, body, "request")
@@ -1348,9 +1588,9 @@ def noise_mails(today: date) -> None:
          "backlog is a social construct,' is not approved."),
         (d(-8), 9, 45, HR, "HR: parking permit renewal (chancellor's office)",
          "Your parking permit for the admin lot is up for renewal. Log in "
-         "to the HR portal to renew. Note: space 'H' is reserved for "
-         "donors; it is always empty, because we keep it for people we "
-         "haven't met yet."),
+         "to the HR portal to renew. Note: space 'H' in the admin lot is "
+         "reserved for donors and is not available for renewal. Please do "
+         "not park in it to see what happens."),
         (d(-6), 13, 10, HR, "HR: wellness program — aurora viewing (counted as exercise)",
          "The wellness program now counts aurora viewing as exercise, per "
          "the geophysical institute. Log your viewing in the wellness "
@@ -1426,9 +1666,8 @@ def noise_mails(today: date) -> None:
          "contact the campus police non-emergency line."),
         (d(-6), 10, 45, POLICE, "Campus Police: lost property — one (1) northern-lights scarf",
          "Found: one (1) northern-lights scarf, outside the Aurora Club "
-         "House. It's a personal item, not a university asset, but it's "
-         "in the lost and found. If this is yours, claim it before the "
-         "end of the month."),
+         "House. It is a personal item, and it is in the lost and found. "
+         "If it is yours, claim it before the end of the month."),
         (d(-4), 13, 30, POLICE, "Campus Police: visitor parking (gala day) — plan confirmed",
          "Visitor parking for gala day is confirmed: 40 validated spaces "
          "in the Hyatt garage, with the plowed east lot as overflow if "
@@ -1451,7 +1690,7 @@ def noise_mails(today: date) -> None:
     food_items = [
         (d(-11), 14, 0, FOOD, "Food & Dining: fall menu feedback",
          "We're planning the fall menu — please take our 2-minute survey. "
-         "The good sour cream (the one from the permafrost-lab mug) is on "
+         "The sour cream from the permafrost-lab mug supplier is back on "
          "the menu, and so is the glow dessert. The moose keychain from "
          "the spam email is not on the menu; it is a keychain, not food."),
         (d(-8), 9, 30, FOOD, "Food & Dining: 'glow' dessert tasting (RSVP)",
@@ -1464,8 +1703,8 @@ def noise_mails(today: date) -> None:
          "mug (the 10,000-year-old tusk fact is on the bottom)."),
         (d(-3), 13, 0, FOOD, "Food & Dining: gala catering — menu B confirmed",
          "Menu B ('Aurora Feast') is confirmed for the gala: king crab, "
-         "smoked Arctic char, baked potato bar with the good sour cream, "
-         "and the 'glow' dessert. The +$1,200 for the glow dessert is in "
+         "smoked Arctic char, baked potato bar, and the 'glow' dessert. "
+         "The +$1,200 for the glow dessert is in "
          "the final invoice."),
         (d(-1), 11, 0, FOOD, "Food & Dining: fall menu — the good sour cream is back",
          "The good sour cream is back on the fall menu, and the glow "
@@ -1473,8 +1712,8 @@ def noise_mails(today: date) -> None:
          "was never here.)"),
         (d(0), 9, 15, FOOD, "Food & Dining: coffee cart — game day (ice arena)",
          "The coffee cart will be at the ice arena on game day, with the "
-         "good coffee and the Seawolves hat for sale. The ice is good, "
-         "the zamboni is good, and the cart is ready."),
+         "good coffee and Seawolves hats for sale. The ice is good, the "
+         "zamboni is serviceable, and the cart will be there by noon.")
     ]
     for day, h, m, frm, subj, body in food_items:
         mail(day, h, m, frm, subj, body, "request")
@@ -1510,9 +1749,8 @@ def noise_mails(today: date) -> None:
         (d(-1), 16, 15, MAYA, "Student senate: budget request",
          "The student senate budget request is in the shared drive — "
          "two new advisor positions, more Aurora Club funding, and the "
-         "student center repair list. For the record, the aurora club "
-         "is correlated with the 3% headcount increase, and we're not "
-         "going to pretend it isn't."),
+         "student center repair list. The aurora club line item is the "
+         "smallest one, and I have attached a chart proving it."),
     ]
     for day, h, m, frm, subj, body in dev_items:
         mail(day, h, m, frm, subj, body, "request")
@@ -1638,9 +1876,9 @@ def noise_mails(today: date) -> None:
          "Re: the 'H' space (again)",
          "The 'H' space in the admin lot was occupied again, and the "
          "occupant was not a donor. It's always empty because we keep "
-         "it for people we haven't met yet. They remain unmet. I've "
-         "asked campus police to log it as a 'near miss.' They have a "
-         "form for everything."),
+         "it for people we haven't met yet. This one turned out to be a "
+         "caterer. I've asked campus police to log it as a near miss, "
+         "which they say they have a form for."),
         (d(-7), 10, 0, "UAA Library <library@uaa.edu>",
          "Library: bond issue briefing for the senate",
          "The library bond issue lands on the senate's agenda this "
@@ -1688,12 +1926,12 @@ def noise_mails(today: date) -> None:
         (d(-8), 18, 40, "S. Redcloud (co-op student) <sredcloud@uaa.edu>",
          "Re: the 'little wolf' photo op with Ralph",
          "Following up on the 'little wolf' photo op with Ralph the "
-         "Walrus: the students think it's a good idea. I think it's a "
-         "good idea. So does the wolf, apparently (he's not in this "
-         "email thread, but the energy is there)."),
+         "Walrus: the students think it is a good idea, and I think it is "
+         "a good idea. The wolf has not been consulted and cannot vote, "
+         "but we take his silence for consent."),
         (d(-6), 20, 15, "Dev Patel (major gifts) <dpatel@alaska.edu>",
          "Re: aurora breakfast photo — the camera is ready",
-         "For the record: the camera is ready. If the aurora shows up "
+         "The camera is ready, and has been since Tuesday. If the aurora shows up "
          "at breakfast, I will take the photo. I will not encourage "
          "it. (I will encourage it. I'm a major gifts person; the "
          "aurora is a separate occurrence, but a good one.)"),
@@ -1701,21 +1939,21 @@ def noise_mails(today: date) -> None:
          "Re: parking on the west side of the GI building",
          "Following up on the parking situation on the west side of the "
          "GI building: my principal has strong feelings about it and "
-         "would like a word with facilities. Please keep me away from "
-         "T. Kowalski. I've met him; he's 'learning,' and I am not "
-         "learning, and we are not learning together."),
+         "would like a word with facilities. Please route it to someone "
+         "other than T. Kowalski. We met once, and he described himself "
+         "as 'still learning,' and I do not think the introduction "
+         "took."),
         (d(-2), 19, 50, MAYA, "Re: student senate budget request — the aurora club is the reason",
-         "For the record: the aurora club is the reason for the 3% "
-         "headcount increase. (It's not. It's correlated. We're not "
-         "going to pretend it isn't.) The full request is in the "
-         "shared drive; it's the 2-page one, not the 14-page one."),
+         "For the record: the aurora club is not the reason for the 3% "
+         "headcount increase. It is correlated with it, and we are not "
+         "going to pretend otherwise. The full request is in the shared "
+         "drive. It is the 2-page version, not the 14-page version."),
         (d(-1), 15, 45, "L. Taimi (campus regent) <l.taimi@uaa.edu>",
          "Re: the poem about parking (it's good)",
-         "For the record: the poem about parking is good. I've "
-         "included it in the regents packet. It's on page 3, which is "
-         "where the permafrost lab is, because page 3 is a social "
-         "construct and everything good lives there. The poem is about "
-         "the 'H' space, the donor space that is always empty. It gets "
+         "For the record: the poem about parking is good. I have "
+         "included it in the regents packet, on page 3, which is also "
+         "where the permafrost lab lives. The poem is about the 'H' "
+         "space, the donor space that is always empty. It understands "
          "why."),
         (d(0), 7, 30, "Katie Nakata (Chancellor's Admin) <katie.nakata@alaska.edu>",
          "The blue folder (inventory, for the record)",
@@ -1724,7 +1962,7 @@ def noise_mails(today: date) -> None:
          "is the right line); (2) the fisheries grant signature page "
          "($750K, real); (3) a photo of the walrus (not for work, just "
          "for morale — the scarf is a personal item, but it's in the "
-         "story, and it's always in the story)."),
+         "story, and it is always in the story)."),
         (d(0), 12, 30, "GI Office <gi-office@gi.alaska.edu>",
          "GI: permafrost core display case (status)",
          "Status on the permafrost core display case: it's staged on "
@@ -1753,12 +1991,14 @@ def render_inbox(today: date) -> str:
     lines = [
         "# Inbox — Dr. Ingrid Halvorsen <ingrid.halvorsen@alaska.edu>",
         "",
-        f"Mailbox export generated {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"Mailbox export generated for {today.isoformat()} (two weeks back, "
+        "newest first)",
         f"Total messages: {len(mails)}",
         "",
         "Format: each message is a `##` heading with "
         "`[YYYY-MM-DD HH:MM] From: ...`, followed by a `**Subject:**` "
-        "line and the body. Messages are newest-first.",
+        "line and the body. Messages are newest-first. Messages whose sender "
+        "is marked `(sent)` are copies of mail the Chancellor sent out.",
         "",
         "---",
         "",
@@ -1785,18 +2025,27 @@ def main() -> None:
     if len(sys.argv) > 1:
         base = datetime.strptime(sys.argv[1], "%Y-%m-%d").date()
     else:
-        base = date.today()
+        base = SIM_TODAY
 
     global MAILS
     MAILS = []
     event_mails(base)
+    titleii_mails(base)
     noise_mails(base)
 
     days = build_calendar(base)
     DATA.mkdir(exist_ok=True)
-    (DATA / "calendar.md").write_text(render_calendar(days), encoding="utf-8")
+    (DATA / "calendar.md").write_text(render_calendar(days, base),
+                                       encoding="utf-8")
     (DATA / "inbox.md").write_text(render_inbox(base), encoding="utf-8")
+    # app.py reads this and treats it as "today", so the calendar opens on the
+    # week that has events no matter when the app is started.
+    (DATA / "base_date.txt").write_text(base.isoformat() + "\n", encoding="utf-8")
 
+    if LAST_CLEAR["moved"] or LAST_CLEAR["dropped"]:
+        print(f"  kept the six Title II slots free on the Chancellor's "
+              f"calendar "
+              f"(moved {LAST_CLEAR['moved']}, dropped {LAST_CLEAR['dropped']})")
     n_events = sum(len(evs) for _, evs in days)
     print(f"Wrote {DATA/'calendar.md'} ({n_events} events over 14 days from "
           f"{base})")
