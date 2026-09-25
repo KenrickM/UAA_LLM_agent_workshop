@@ -1,8 +1,11 @@
 # Next Day Preparation — Workshop Simulator
 
-A fake **email + calendar** web app for an agent-LLM workshop. Participants
-build a **"Next Day Preparation" agent**: it reads the simulated calendar for
-*tomorrow*, summarizes the day's schedule, then scans the simulated inbox for
+A fake **email + calendar** web app for the AI Symposium agent-LLM workshop. 
+Participants build a **"Email Action Items" via CoPilot** and also
+build a **"Next Day Preparation" agent** via CoPilot or Hermes Agent.
+It reads the simulated calendar for
+*tomorrow* (current day always 9/25), summarizes the day's schedule, 
+then scans the simulated inbox for
 emails relevant to each calendar event and attaches them as context.
 
 The mailbox belongs to **Dr. Ingrid Halvorsen, Chancellor of the University
@@ -10,15 +13,13 @@ of Alaska Anchorage** — so the data includes board meetings, state budget
 testimony, a permafrost-lab ribbon cutting, an aurora donor gala, Arctic wolf
 pack telemetry, Ralph the Walrus (mascot), and a suspicious amount of spam.
 
-Everything is self-contained: **Python 3 stdlib only, no dependencies, no
+Everything is self-contained: **Python 3, no
 real email or calendar accounts.**
 
 ## Quick start
 
 ```bash
 cd next-day-prep
-python3 generate.py        # (re)creates data/calendar.md + data/inbox.md
-                           # dated relative to *today*
 python3 app.py             # serves the web app on http://localhost:8321
 ```
 
@@ -71,7 +72,7 @@ the markdown the agent reads has none of that.)
 
 ## The workshop exercise (suggested)
 
-Give participants this spec:
+For the calendar agent, here is a possible spec:
 
 > Build an agent that, when run in the morning:
 > 1. Reads the calendar for **the next day** (`data/calendar.md` or
@@ -120,10 +121,10 @@ Any emails appended via `/send` disappear on regeneration.
 
 ```
 next-day-prep/
-├── app.py          # web app (stdlib http.server, no dependencies)
-├── generate.py     # sample-data generator (dates relative to today)
-├── README.md
-└── data/
-    ├── calendar.md # 14 days of events
-    └── inbox.md    # 154 emails
+ app.py          # web app (stdlib http.server, no dependencies)
+ generate.py     # sample-data generator (dates relative to today)
+ README.md
+ data/
+     calendar.md # 14 days of events
+     inbox.md    # 154 emails
 ```
