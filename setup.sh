@@ -14,7 +14,7 @@ model: "${MODEL_NAME}"
 provider: "custom"
 base_url: "${BASE_URL}"
 api_key: "none"
-context_length: 8192
+context_length: 65536
 
 # Enable local Codespace tool execution
 terminal:
@@ -32,7 +32,7 @@ hermes config set provider custom
 hermes config set base_url "${BASE_URL}"
 hermes config set model "${MODEL_NAME}"
 hermes config set api_key "none"
-hermes config set context_length 8192
+hermes config set context_length 65536
 
 echo "🚀 Starting Hermes Dashboard on Port 9119..."
 hermes dashboard --port 9119
